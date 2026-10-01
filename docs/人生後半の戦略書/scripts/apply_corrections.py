@@ -29,6 +29,7 @@ SKIP_WORDS = (
     "改行", "独立行", "分離", "再配置", "復元", "移動", "連結", "入れ替", "順序",
     "並べ", "統一", "参照", "／", "〜のように", "として", "削除／", "区切り",
     "見出し", "＋", "→", "項目", "段落", "を削除", "に分け", "から本文", "キャプション",
+    "接続", "切り", "前半", "後半", "直結", "または", "続き", "挿入", "直前", "直後", "ノイズ",
 )
 
 # 全文に適用してよい、文脈に依存しない語の置換（OCR の字形混同）
@@ -41,6 +42,11 @@ SAFE_WORD_RULES = (
     ("Houghton Miflin", "Houghton Mifflin"), ("Protessors", "Professors"), ("Mindtuness", "Mindfulness"),
 )
 DELETE_MARKERS = ("（削除）", "(削除)", "削除", "—", "―", "（削除／ロゴ）", "(なし)", "（なし）")
+
+
+def is_delete_marker(s: str) -> bool:
+    s = s.strip()
+    return s in DELETE_MARKERS or bool(re.fullmatch(r"[（(]削除[^）)]{0,6}[）)]", s))
 
 
 def strip_quotes(s: str) -> str:
@@ -89,13 +95,18 @@ def parse_logs(log_dir: str):
 
 
 def is_instruction(row) -> bool:
-    r = row["right"]
-    if r.startswith("（削除") or r in DELETE_MARKERS:
+    r = row["right"].strip()
+    if is_delete_marker(r):
         return False
     if any(w in r for w in SKIP_WORDS):
         return True
     if any(w in row["wrong"] for w in ("1 行に", "1行に", "行が分割", "全体")):
         return True
+    # 改行ずれ・欠落系で「正」が長いものは、ほぼ復元手順の説明文
+    if ("改行ずれ" in row["kind"] or "欠落" in row["kind"]) and len(r) > 12:
+        return True
+    if re.search(r"\b\d{3,4}\b", r) and ("改行" in row["kind"] or "ノイズ" in row["kind"]):
+        return True  # 行番号への言及
     # 「正」が「誤」の 3 倍超に膨らんでいるものは説明文とみなす
     if len(r) > 3 * max(len(row["wrong"]), 8):
         return True
@@ -177,7 +188,7 @@ def main():
             unmatched.append(row)
             continue
         wrong = strip_annotation(row["wrong"])
-        is_delete = row["right"].startswith("（削除") or row["right"] in DELETE_MARKERS
+        is_delete = is_delete_marker(row["right"])
         right = "" if is_delete else strip_annotation(row["right"])
         if wrong not in lines[idx]:
             w2, r2 = strip_quotes(wrong), (strip_quotes(right) if right else "")
